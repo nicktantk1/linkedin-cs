@@ -136,6 +136,7 @@ async def scrape_jobs(keyword: str) -> list:
             "keywords": keyword,
             "geoId":    GEO_ID,
             "f_TPR":    TIME_RANGE,
+            "f_E":      EXP_LEVEL
         })
     )
 
