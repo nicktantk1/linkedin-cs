@@ -236,10 +236,20 @@ async def fetch_job_details(job_ids: list[str]) -> list[dict]:
                 continue
 
             title_el = await page.query_selector(
-                "h1.top-card-layout__title, h1.t-24, h1"
+                (
+                    "h1.top-card-layout__title, "
+                    "h1.t-24, "
+                    "h1, "
+                    "._6b06b22f._9c3c3006.b2efed5c._47af83a7._2327f28f.aa661bbd._62051d4a._112a7898._9ebd600b"
+                )
             )
             company_el = await page.query_selector(
-                "a.topcard__org-name-link, .topcard__flavor-row a, .top-card-layout__card .topcard__flavor"
+                (
+                    "a.topcard__org-name-link, "
+                    ".topcard__flavor-row a, "
+                    ".top-card-layout__card .topcard__flavor, "
+                    "a._112a7898._727ac2a2._38a26304.d4697dfb"
+                )
             )
             title = (await title_el.inner_text()).strip() if title_el else "Unknown Title"
             company = (await company_el.inner_text()).strip() if company_el else "Unknown Company"
