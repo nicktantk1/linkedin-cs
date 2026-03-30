@@ -34,7 +34,7 @@ from playwright.async_api import async_playwright
 # ---------------------------------------------------------------------------
 load_dotenv()
 
-LINKEDIN_URL = "https://www.linkedin.com/jobs/search/?keywords=marketingf_TPR=r3600&geoId=102454443"
+LINKEDIN_URL = "https://www.linkedin.com/jobs/search/?keywords=marketing&f_TPR=r3600&geoId=102454443"
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -97,6 +97,11 @@ def get_seen_ids(conn: sqlite3.Connection) -> set[str]:
     return {r[0] for r in rows}
 
 
+def get_seen_count(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COUNT(*) FROM seen_jobs").fetchone()
+    return int(row[0]) if row else 0
+
+
 def is_new_job(conn: sqlite3.Connection, job_id: str) -> bool:
     row = conn.execute("SELECT 1 FROM seen_jobs WHERE job_id = ?", (job_id,)).fetchone()
     return row is None
@@ -112,6 +117,19 @@ def mark_jobs_sent(conn: sqlite3.Connection, job_ids: list[str]) -> None:
         [(job_id, now) for job_id in job_ids],
     )
     conn.commit()
+
+
+def log_runtime_context(reset: bool) -> None:
+    """Log execution context useful for cron and persistence debugging."""
+    log.info(
+        "Run context | reset=%s cwd=%s db_path=%s db_exists=%s github_run_id=%s github_run_attempt=%s",
+        reset,
+        Path.cwd(),
+        DB_PATH.resolve(),
+        DB_PATH.exists(),
+        os.getenv("GITHUB_RUN_ID", "local"),
+        os.getenv("GITHUB_RUN_ATTEMPT", "n/a"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +362,7 @@ async def scrape_jobs(url: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 async def main(reset: bool = False) -> None:
+    log_runtime_context(reset)
     conn = init_db(DB_PATH)
 
     if reset:
@@ -352,18 +371,27 @@ async def main(reset: bool = False) -> None:
         log.info("Database cleared.")
 
     seen_ids = get_seen_ids(conn)
-    log.info(f"Already sent {len(seen_ids)} job(s) in DB.")
+    log.info(
+        "Already sent %s job(s) in DB (row_count=%s).",
+        len(seen_ids),
+        get_seen_count(conn),
+    )
 
     scraped_ids = await scrape_jobs(LINKEDIN_URL)
     log.info(f"Scraped {len(scraped_ids)} job id(s) from LinkedIn.")
+    if scraped_ids:
+        log.info("Scraped IDs sample: %s", scraped_ids[:10])
 
     new_job_ids = [job_id for job_id in scraped_ids if is_new_job(conn, job_id)]
     log.info(f"{len(new_job_ids)} new job id(s) found.")
+    if new_job_ids:
+        log.info("New IDs sample: %s", new_job_ids[:10])
 
     if new_job_ids:
         new_jobs = await fetch_job_details(new_job_ids)
         await send_telegram(new_jobs)
         mark_jobs_sent(conn, [j["job_id"] for j in new_jobs])
+        log.info("After mark sent, DB row_count=%s.", get_seen_count(conn))
         log.info("Done — notifications sent.")
     else:
         log.info("No new jobs — nothing to do.")
