@@ -31,16 +31,16 @@ jobs:
           ls -la
           if [ -f seen_jobs.db ]; then
             python - <<'PY'
-import sqlite3
-conn = sqlite3.connect('seen_jobs.db')
-try:
-    count = conn.execute('select count(*) from seen_jobs').fetchone()[0]
-    print(f'pre-run seen_jobs rows={count}')
-except Exception as exc:
-    print(f'pre-run db exists but query failed: {exc}')
-finally:
-    conn.close()
-PY
+          import sqlite3
+          conn = sqlite3.connect('seen_jobs.db')
+          try:
+            count = conn.execute('select count(*) from seen_jobs').fetchone()[0]
+            print(f'pre-run seen_jobs rows={count}')
+          except Exception as exc:
+            print(f'pre-run db exists but query failed: {exc}')
+          finally:
+            conn.close()
+          PY
           else
             echo "pre-run seen_jobs.db not found"
           fi
@@ -56,16 +56,16 @@ PY
         run: |
           if [ -f seen_jobs.db ]; then
             python - <<'PY'
-import sqlite3
-conn = sqlite3.connect('seen_jobs.db')
-try:
-    count = conn.execute('select count(*) from seen_jobs').fetchone()[0]
-    print(f'post-run seen_jobs rows={count}')
-except Exception as exc:
-    print(f'post-run db exists but query failed: {exc}')
-finally:
-    conn.close()
-PY
+          import sqlite3
+          conn = sqlite3.connect('seen_jobs.db')
+          try:
+            count = conn.execute('select count(*) from seen_jobs').fetchone()[0]
+            print(f'post-run seen_jobs rows={count}')
+          except Exception as exc:
+            print(f'post-run db exists but query failed: {exc}')
+          finally:
+            conn.close()
+          PY
           else
             echo "post-run seen_jobs.db not found"
           fi
