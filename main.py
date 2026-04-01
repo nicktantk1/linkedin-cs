@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
-
+import random
 import httpx
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -39,9 +39,9 @@ SEARCH_KEYWORDS = [
 ]
 
 GEO_ID      = "102454443"   # Singapore
-TIME_RANGE  = "r3600"       # posted in the last hour
+TIME_RANGE  = "r10800"       # posted in the last 3 hours
 EXP_LEVEL   = "1,2"         # internship + entry level
-COMPANY_FOLLOWERS = 1000
+MIN_FOLLOWERS = 1000
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
@@ -96,27 +96,31 @@ def truncate(text: str, max_len: int) -> str:
     text = text.strip()
     return text if len(text) <= max_len else text[: max_len - 3].rstrip() + "..."
 
-
 def parse_followers_count(text: str) -> Optional[int]:
-    """Parse follower counts like '1,234 followers' or '2.5K followers'."""
-    match = re.search(r"([\d.,]+)\s*([kKmM]?)\s+followers?", text)
+    if not text:
+        return None
+
+    # Handles:
+    # "12,345 followers"
+    # "12K followers"
+    # "1.2M followers"
+    match = re.search(
+        r"([\d,]+(?:\.\d+)?)\s*([KkMm])?\s+followers",
+        text,
+        re.IGNORECASE,
+    )
     if not match:
         return None
 
-    raw_number = match.group(1).replace(",", "").strip()
-    suffix = match.group(2).lower()
+    num = float(match.group(1).replace(",", ""))
+    suffix = (match.group(2) or "").upper()
 
-    try:
-        value = float(raw_number)
-    except ValueError:
-        return None
+    if suffix == "K":
+        num *= 1_000
+    elif suffix == "M":
+        num *= 1_000_000
 
-    if suffix == "k":
-        value *= 1_000
-    elif suffix == "m":
-        value *= 1_000_000
-
-    return int(value)
+    return int(num)
 
 # ---------------------------------------------------------------------------
 # Database
@@ -207,56 +211,97 @@ async def fetch_job_details(job_ids: list) -> list:
             job_url = f"https://www.linkedin.com/jobs/view/{job_id}/"
             try:
                 await page.goto(job_url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
-                await page.wait_for_timeout(1000)
+                await page.wait_for_selector("h1.top-card-layout__title", timeout=8000)
             except Exception as exc:
                 log.warning(f"Could not load job {job_id}: {exc}")
                 continue
 
-            title_el   = await page.query_selector("h1.top-card-layout__title, h1.t-24, h1")
-            company_el = await page.query_selector("a.topcard__org-name-link, .topcard__flavor-row a")
+            # --- Title ---
+            try:
+                title_el = await page.query_selector("h1.top-card-layout__title, h1.t-24, h1")
+                title = (await title_el.inner_text()).strip() if title_el else "Unknown Title"
+            except Exception as exc:
+                log.warning(f"Could not extract title for {job_id}: {exc}")
+                title = "Unknown Title"
 
-            title   = (await title_el.inner_text()).strip()   if title_el   else "Unknown Title"
-            company = (await company_el.inner_text()).strip() if company_el else "Unknown Company"
+            # --- Company name + URL ---
+            company = "Unknown Company"
+            company_url = None
+            try:
+                company_el = await page.query_selector("a.topcard__org-name-link")
+                if company_el:
+                    company = (await company_el.inner_text()).strip()
+                    href = await company_el.get_attribute("href")
+                    if href:
+                        company_url = href.split("?")[0].rstrip("/")
+            except Exception as exc:
+                log.warning(f"Could not extract company for {job_id}: {exc}")
 
-            followers: Optional[int] = None
-            follower_elements = await page.query_selector_all("section, div, p, span")
-            for element in follower_elements:
-                text = re.sub(r"\s+", " ", (await element.inner_text()).strip())
-                if "follower" not in text.lower():
-                    continue
-                followers = parse_followers_count(text)
-                if followers is not None:
-                    break
-
-            if followers is None:
-                html = await page.content()
-                followers = parse_followers_count(BeautifulSoup(html, "html.parser").get_text(" ", strip=True))
-
-            if followers is not None and followers < COMPANY_FOLLOWERS:
-                continue
-
+            # --- Bullets (while still on job page) ---
             bullets = []
             for selector in [
                 ".show-more-less-html__markup li",
                 ".description__text li",
                 ".jobs-description__content li",
             ]:
-                for el in await page.query_selector_all(selector):
-                    text = re.sub(r"\s+", " ", (await el.inner_text()).strip())
-                    if len(text) >= 25 and text not in bullets:
-                        bullets.append(text)
+                try:
+                    for el in await page.query_selector_all(selector):
+                        text = re.sub(r"\s+", " ", (await el.inner_text()).strip())
+                        if len(text) >= 25 and text not in bullets:
+                            bullets.append(text)
+                except Exception as exc:
+                    log.warning(f"Could not extract bullets with selector '{selector}' for {job_id}: {exc}")
+
+            # --- Followers + Company size (from company page) ---
+            followers = None
+            company_size = None
+            if company_url:
+                try:
+                    await page.goto(company_url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
+                    await page.wait_for_timeout(1500)
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await page.wait_for_timeout(1000)
+
+                    body_text = await page.inner_text("body")
+                    followers = parse_followers_count(body_text)
+
+                    size_match = re.search(
+                        r"([\d,]+\+?)\s*[-–]\s*([\d,]+)\s+employees|([\d,]+\+)\s+employees",
+                        body_text,
+                        re.IGNORECASE,
+                    )
+                    if size_match:
+                        company_size = size_match.group(0).strip()
+
+                except Exception as exc:
+                    log.warning(f"Could not load company page for {job_id} ({company_url}): {exc}")
+            else:
+                log.warning(f"No company URL found for job {job_id}, skipping followers/size")
+
+            if followers is None:
+                log.warning(f"Followers not found for {job_id}")
+            else:
+                log.info(f"Job {job_id} — {company} has {followers} followers")
+
+            if followers is not None and followers < MIN_FOLLOWERS:
+                log.info(f"Skipping job {job_id} — {company} has {followers} followers (below threshold)")
+                await page.wait_for_timeout(random.randint(1500, 3000))
+                continue
+
 
             jobs.append({
                 "job_id": job_id,
                 "title": title,
                 "company": company,
+                "company_size": company_size,
                 "bullets": bullets,
                 "followers": followers,
             })
 
+            await page.wait_for_timeout(random.randint(1500, 3000))
+
         await browser.close()
     return jobs
-
 # ---------------------------------------------------------------------------
 # Telegram
 # ---------------------------------------------------------------------------
@@ -275,6 +320,7 @@ async def send_telegram(jobs: list) -> None:
                 f"*{escape_md(truncate(job['title'], 160))}*\n"
                 f"🏢 Company: {escape_md(truncate(job['company'], 120))}\n\n"
                 f"👥 Followers: {job['followers'] if job['followers'] is not None else 'N/A'}\n\n"
+                f"🗿 Size: {escape_md(truncate(job['company_size'], 100)) if job['company_size'] else 'N/A'}\n\n"
                 f"*📌 Highlights:*\n{bullets}\n\n"
                 f"[View on LinkedIn]({job_url})",
                 3500,
