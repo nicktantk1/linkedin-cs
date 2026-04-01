@@ -41,6 +41,7 @@ SEARCH_KEYWORDS = [
 GEO_ID      = "102454443"   # Singapore
 TIME_RANGE  = "r3600"       # posted in the last hour
 EXP_LEVEL   = "1,2"         # internship + entry level
+COMPANY_FOLLOWERS = 1000
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
@@ -94,6 +95,28 @@ def escape_md(text: str) -> str:
 def truncate(text: str, max_len: int) -> str:
     text = text.strip()
     return text if len(text) <= max_len else text[: max_len - 3].rstrip() + "..."
+
+
+def parse_followers_count(text: str) -> Optional[int]:
+    """Parse follower counts like '1,234 followers' or '2.5K followers'."""
+    match = re.search(r"([\d.,]+)\s*([kKmM]?)\s+followers?", text)
+    if not match:
+        return None
+
+    raw_number = match.group(1).replace(",", "").strip()
+    suffix = match.group(2).lower()
+
+    try:
+        value = float(raw_number)
+    except ValueError:
+        return None
+
+    if suffix == "k":
+        value *= 1_000
+    elif suffix == "m":
+        value *= 1_000_000
+
+    return int(value)
 
 # ---------------------------------------------------------------------------
 # Database
@@ -195,6 +218,23 @@ async def fetch_job_details(job_ids: list) -> list:
             title   = (await title_el.inner_text()).strip()   if title_el   else "Unknown Title"
             company = (await company_el.inner_text()).strip() if company_el else "Unknown Company"
 
+            followers: Optional[int] = None
+            follower_elements = await page.query_selector_all("section, div, p, span")
+            for element in follower_elements:
+                text = re.sub(r"\s+", " ", (await element.inner_text()).strip())
+                if "follower" not in text.lower():
+                    continue
+                followers = parse_followers_count(text)
+                if followers is not None:
+                    break
+
+            if followers is None:
+                html = await page.content()
+                followers = parse_followers_count(BeautifulSoup(html, "html.parser").get_text(" ", strip=True))
+
+            if followers is not None and followers < COMPANY_FOLLOWERS:
+                continue
+
             bullets = []
             for selector in [
                 ".show-more-less-html__markup li",
@@ -206,7 +246,13 @@ async def fetch_job_details(job_ids: list) -> list:
                     if len(text) >= 25 and text not in bullets:
                         bullets.append(text)
 
-            jobs.append({"job_id": job_id, "title": title, "company": company, "bullets": bullets})
+            jobs.append({
+                "job_id": job_id,
+                "title": title,
+                "company": company,
+                "bullets": bullets,
+                "followers": followers,
+            })
 
         await browser.close()
     return jobs
@@ -227,7 +273,8 @@ async def send_telegram(jobs: list) -> None:
 
             text = truncate(
                 f"*{escape_md(truncate(job['title'], 160))}*\n"
-                f"🏢 {escape_md(truncate(job['company'], 120))}\n\n"
+                f"🏢 Company: {escape_md(truncate(job['company'], 120))}\n\n"
+                f"👥 Followers: {job['followers'] if job['followers'] is not None else 'N/A'}\n\n"
                 f"*📌 Highlights:*\n{bullets}\n\n"
                 f"[View on LinkedIn]({job_url})",
                 3500,
@@ -277,8 +324,9 @@ async def main(reset: bool = False) -> None:
 
     if new_ids:
         jobs = await fetch_job_details(new_ids)
-        await send_telegram(jobs)
-        mark_sent(conn, [j["job_id"] for j in jobs])
+        if jobs:
+            await send_telegram(jobs)
+            mark_sent(conn, [j["job_id"] for j in jobs])
 
     conn.close()
 
