@@ -1,38 +1,56 @@
-#include <iostream>
-#include <unistd.h>
-#include <thread>
-#include <numeric>
+#include <mutex>
+#include <stdexcept>
+#include <climits>
 
-template<typename Iterator, typename T>
-T parallel_accumulate(Iterator first, Iterator last, T init) {
-    auto accumulate_block = [](Iterator first, Iterator last, T& result) {
-        result = std::accumulate(first, last, result);
-    };
-    unsigned long const length = std::distance(first, last);
-    if (!length) return init;
-    unsigned long const min_per_thread = 25;
-    unsigned long const max_threads = (length - 1) / min_per_thread + 1;
-    unsigned long const hardware_threads = std::thread::hardware_concurrency(); 
-    unsigned long const num_threads = std::min(hardware_threads != 0 ? hardware_threads : 2, max_threads);
-    unsigned long const block_size = length / num_threads;
-    std::vector<T> results(num_threads);
-    std::vector<std::thread> threads(num_threads - 1);
-    Iterator block_start = first;
-    for (unsigned long i = 0; i < (num_threads - 1); ++i) {
-        Iterator block_end = block_start;
-        std::advance(block_end, block_size);
-        threads[i] = std::thread(accumulate_block, block_start, block_end, std::ref(results[i]));
-        block_start = block_end;
-    }
-    accumulate_block(block_start, last, results[num_threads - 1]);
-    for (unsigned long i = 0; i < (num_threads - 1); ++i) {
-        threads[i].join();
-    }
-    return std::accumulate(results.begin(), results.end(), init);
-}   
+class hierarchical_mutex
+{
+public:
+    explicit hierarchical_mutex(unsigned long value)
+        : hierarchy_value(value)
+        , previous_hierarchy_value(0)
+    {}
 
-int main() {
-    std::vector<int> v(1000000, 1);
-    std::cout << parallel_accumulate(v.begin(), v.end(), 0) << std::endl;
-    return 0;
-}
+    void lock()
+    {
+        check_for_hierarchy_violation();
+        internal_mutex.lock();
+        update_hierarchy_value();
+    }
+
+    void unlock()
+    {
+        if (this_thread_hierarchy_value != hierarchy_value)
+            throw std::logic_error("mutex hierarchy violated");
+        this_thread_hierarchy_value = previous_hierarchy_value;
+        internal_mutex.unlock();
+    }
+
+    bool try_lock()
+    {
+        check_for_hierarchy_violation();
+        if (!internal_mutex.try_lock())
+            return false;
+        update_hierarchy_value();
+        return true;
+    }
+
+private:
+    std::mutex                              internal_mutex;
+    unsigned long const                     hierarchy_value;
+    unsigned long                           previous_hierarchy_value;
+    static thread_local unsigned long       this_thread_hierarchy_value;
+
+    void check_for_hierarchy_violation() const
+    {
+        if (this_thread_hierarchy_value <= hierarchy_value)
+            throw std::logic_error("mutex hierarchy violated");
+    }
+
+    void update_hierarchy_value()
+    {
+        previous_hierarchy_value      = this_thread_hierarchy_value;
+        this_thread_hierarchy_value   = hierarchy_value;
+    }
+};
+
+thread_local unsigned long hierarchical_mutex::this_thread_hierarchy_value(ULONG_MAX);
