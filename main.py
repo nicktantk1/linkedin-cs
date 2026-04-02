@@ -27,15 +27,10 @@ from playwright.async_api import async_playwright
 load_dotenv()
 
 SEARCH_KEYWORDS = [
-    "marketing coordinator",
-    "communications coordinator",
-    "corporate communications",
-    "business development associate",
-    "partnerships coordinator",
-    "programme coordinator",
-    "project coordinator",
-    "talent acquisition coordinator",
-    "recruiter associate",
+    "quantitative developer",
+    "software engineer",
+    "backend engineer",
+    "c++ developer",
 ]
 
 GEO_ID      = "102454443"   # Singapore
