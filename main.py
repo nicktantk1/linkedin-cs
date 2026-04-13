@@ -33,10 +33,10 @@ SEARCH_KEYWORDS = [
     "c++ developer",
 ]
 
-GEO_ID      = "102454443"    # Singapore
-TIME_RANGE  = "r10800"       # posted in the last 3 hours
-EXP_LEVEL   = "1"            # internship
-MIN_FOLLOWERS = 1000
+GEO_ID      = "na:us:ca"    # California, United States
+TIME_RANGE  = "r86400"       # posted in the last 24 hours
+EXP_LEVEL   = "2"            # Entry level positions
+MIN_FOLLOWERS = 100000        # Increase minimum follower threshold to 100k
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
